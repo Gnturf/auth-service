@@ -7,22 +7,19 @@ import (
 	"auth-service/model/domain"
 	"context"
 	"database/sql"
-	"log"
 )
 
 type TokenRepositoryImpl struct {
 	Config *config.AppConfig
-	Logger *log.Logger
 }
 
-func NewTokenRepository(config *config.AppConfig, logger *log.Logger) TokenRepository {
+func NewTokenRepository(config *config.AppConfig) TokenRepository {
 	return &TokenRepositoryImpl{
 		Config: config,
-		Logger: logger,
 	}
 }
 
-func (repository *TokenRepositoryImpl) FetchRefreshToken(ctx context.Context, token *domain.Tokens, tx *sql.Tx) (domain.Tokens, error) {
+func (repository *TokenRepositoryImpl) FetchRefreshToken(ctx context.Context, token *domain.WebToken, tx *sql.Tx) (domain.WebToken, error) {
 	// Prepare the SQL query
 	query := "SELECT user_id, token FROM refresh_tokens WHERE token = $1 AND expire_at > NOW() AND revoked = false"
 
@@ -33,9 +30,9 @@ func (repository *TokenRepositoryImpl) FetchRefreshToken(ctx context.Context, to
 	err := row.Scan(&token.Id, &token.RefreshToken)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return *token, exception.NewRepositoryError(exception.RefreshTokenWasNotFound, "Fetch Refresh Token")
+			return *token, exception.NewRepositoryError(exception.RefreshTokenWasNotFound, exception.ErrRefreshTokenWasNotFound, "Fetch Refresh Token")
 		}
-		return *token, exception.NewRepositoryError(err.Error(), "Fetch Refresh Token")
+		return *token, exception.NewRepositoryError(err.Error(), err, "Fetch Refresh Token")
 	}
 
 	// Return
@@ -49,27 +46,27 @@ func (repository *TokenRepositoryImpl) InsertRefreshToken(ctx context.Context, u
 
 	_, err := tx.ExecContext(ctx, query, user.Id, refreshToken, inXDay)
 	if err != nil {
-		return exception.NewRepositoryError(err.Error(), "InserRefreshToken")
+		return exception.NewRepositoryError(err.Error(), err, "InserRefreshToken")
 	}
 
 	return nil
 }
 
-func (reqpository *TokenRepositoryImpl) RevokeRefreshToken(ctx context.Context, token *domain.Tokens, tx *sql.Tx) (error) {
+func (reqpository *TokenRepositoryImpl) RevokeRefreshToken(ctx context.Context, token *domain.WebToken, tx *sql.Tx) (error) {
 	query := "UPDATE refresh_tokens SET revoked = TRUE WHERE token = $1"
 
 	result, err := tx.ExecContext(ctx, query, token.RefreshToken)
 	if err != nil {
-		return exception.NewRepositoryError(err.Error(), "Query")
+		return exception.NewRepositoryError(err.Error(), err, "Query")
 	}
 
 	affectedRow, err := result.RowsAffected()
 	if err != nil {
-		return exception.NewRepositoryError(err.Error(), "Affected Row")
+		return exception.NewRepositoryError(err.Error(), err, "Affected Row")
 	}
 
 	if affectedRow == 0 {
-		return exception.NewRepositoryError(exception.UserWasNotFound, "Affected Row")
+		return exception.NewRepositoryError(exception.UserWasNotFound, exception.ErrUserWasNotFound, "Affected Row")
 	}
 
 	return nil

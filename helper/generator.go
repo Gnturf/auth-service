@@ -11,6 +11,10 @@ func GenerateRefreshToken(length int) (string, error) {
 	return gonanoid.Generate("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", length)
 }
 
+func GenerateNumericToken(length int) (string, error) {
+	return gonanoid.Generate("0123456789", length)
+}
+
 func GenerateJWTAccessToken(id string, key string) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub": id,
@@ -32,7 +36,11 @@ func XDaysFromNowOnMidnight(x int) time.Time {
 	return inXDays
 }
 
-func TTLXMin(x int) time.Time {
-	
+func TTLXMin(x int) time.Duration {
+	return time.Minute * 2
 }
 
+func TTLXDay(x int) time.Time{
+	nextXDay := time.Now().AddDate(0, 0, x)
+	return nextXDay
+}

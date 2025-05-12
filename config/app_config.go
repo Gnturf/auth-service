@@ -11,6 +11,9 @@ type AppConfig struct {
 	RefreshTokenExpiredDays int
 	RefreshTokenLength      int
 	BcryptHashCost 					int
+	RedisHost								string
+	RedisPort 							string
+	RedisDB									int
 }
 
 var AppConfigInstance AppConfig
@@ -21,6 +24,9 @@ func LoadEnv() {
 	AppConfigInstance.RefreshTokenExpiredDays = LoadEnvInt("REFRESH_TOKEN_EXPIRED_DAYS")
 	AppConfigInstance.RefreshTokenLength = LoadEnvInt("REFRESH_TOKEN_LENGTH")
 	AppConfigInstance.BcryptHashCost = LoadEnvInt("BCRYPT_HASH_COST")
+	AppConfigInstance.RedisHost = os.Getenv("REDIS_HOST")
+	AppConfigInstance.RedisPort = os.Getenv("REDIS_PORT")
+	AppConfigInstance.RedisDB = LoadEnvInt("REDIS_DB")
 }
 
 func LoadEnvInt(key string) int {

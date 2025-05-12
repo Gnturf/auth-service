@@ -1,6 +1,6 @@
 package domain
 
-type Tokens struct {
+type WebToken struct {
 	AccessToken  string
 	RefreshToken string
 	Id           string

@@ -5,10 +5,18 @@ import (
 	"auth-service/model/web"
 	"auth-service/service"
 	"fmt"
-	"log"
 
 	"github.com/labstack/echo/v4"
 )
+
+/**
+GENERAL STEP TO WRITE CONTROLLER
+1. Bind the data to model
+2. Basic validate the model
+3. Pass the data to service
+4. Create response object & set header
+5. Send response object
+*/
 
 type AuthControllerImpl struct {
 	AuthService service.AuthService
@@ -22,26 +30,37 @@ func NewAuthController(authService service.AuthService, config *config.AppConfig
 	}
 }
 
+// DONE 12/05/25
 func (controller *AuthControllerImpl) HandleSignup(c echo.Context) error {
-	log := log.Default()
-	log.Printf("%s hit the server", c.RealIP())
 	// 1. Bind the email, password, profile name, image_url to UserCreateRequest struct
 	var createRequest web.UserCreateRequest
 	err := c.Bind(&createRequest)
 	if err != nil {
-		return c.JSON(400, map[string]string{"error": "Invalid request"})
+		return c.JSON(200, web.WebResponse{
+			Status: "failed",
+			Code: 4000,
+			Data: "Invalid request",
+		})
 	}
 
 	// 2. Validate the request
 	err = createRequest.BasicValidate()
 	if err != nil {
-		return c.JSON(400, map[string]string{"error": err.Error()})
+		return c.JSON(200, web.WebResponse{
+			Status: "failed",
+			Code: 4000,
+			Data: err.Error(),
+		})
 	}
 
 	// 3. Pass UserCreateRequest to the authService to create a new user
 	data, err := controller.AuthService.Signup(createRequest)
 	if err != nil {
-		return c.JSON(400, map[string]string{"error": err.Error()})
+		return c.JSON(200, web.WebResponse{
+			Status: "failed",
+			Code: 4000,
+			Data: err.Error(),
+		})
 	}
 
 	// 4. Create response object with the user data and status code
@@ -85,6 +104,47 @@ func (controller *AuthControllerImpl) HandleSignin(c echo.Context) error {
 	}
 
 	return c.JSON(200, webResponse)
+}
+
+// DONE 12/05/25
+func (controller *AuthControllerImpl) HandleCheckEmail(c echo.Context) error {
+	// 1. Bind the data to model
+	userCheckEmailRequest := web.UserCheckEmailRequest{}
+	err := c.Bind(&userCheckEmailRequest)
+	if err != nil {
+		return c.JSON(200, web.WebResponse{Status: "failed", Code: 4000, Data: "Invalid request"})
+	}
+
+	// 2. Basic validate the model
+	err = userCheckEmailRequest.BasicValidate()
+	if err != nil {
+		return c.JSON(200, web.WebResponse{Status: "failed", Code: 4000, Data: err.Error()})
+	}
+
+	// 3. Pass the data to service
+	res, err := controller.AuthService.CheckEmail(userCheckEmailRequest)
+	if err != nil {
+		return c.JSON(200, web.WebResponse{Status: "failed", Code: 4000, Data: err.Error()})
+	}
+
+	// 4. Create response object & set header
+	var response web.WebResponse
+
+	if res {
+		response = web.WebResponse{
+			Status: "failed",
+			Code: 4009,
+			Data: "email already exist",
+		}
+	} else {
+		response = web.WebResponse{
+			Status: "success",
+			Code: 200,
+		}
+	}
+
+	// 5. Send response object
+	return c.JSON(200, response)
 }
 
 func (controller *AuthControllerImpl) HandleRefresh(c echo.Context) error {

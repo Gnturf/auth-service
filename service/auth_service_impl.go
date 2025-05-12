@@ -9,122 +9,146 @@ import (
 	"auth-service/repository"
 	"context"
 	"database/sql"
-	"log"
+	"errors"
+	"time"
 
-	"github.com/go-playground/validator"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 )
 
+/**
+GENERAL STEP TO WRITE SERVICE
+1. Create necessary variable (e.g context, db)
+2. Create defer for db
+3. Fully validate the request
+4. Bind the data to domain
+5. custom ...
+6. Create response
+*/
+
 type AuthServiceImpl struct {
-	AuthRepository repository.AuthRepository
+	UserRepository repository.UserRepository
 	TokenRepository repository.TokenRepository
+	EmailVerificationRepository repository.EmailVerificationRepository
 	Config *config.AppConfig
-	Logger *log.Logger
 	DB *sql.DB
+	Redis *redis.Client
 }
 
-func NewAuthService(authRepository repository.AuthRepository, tokenRepository repository.TokenRepository, config *config.AppConfig, logger *log.Logger, db *sql.DB, validation *validator.Validate) AuthService {
+func NewAuthService(userRepository repository.UserRepository, tokenRepository repository.TokenRepository, emailVerificationRepository repository.EmailVerificationRepository, config *config.AppConfig, db *sql.DB, redis *redis.Client) AuthService {
 	return &AuthServiceImpl{
-		AuthRepository: authRepository,
+		UserRepository: userRepository,
 		TokenRepository: tokenRepository,
+		EmailVerificationRepository: emailVerificationRepository,
 		Config: config,
-		Logger: logger,
 		DB: db,
+		Redis: redis,
 	}
 }
 
-func (service *AuthServiceImpl) Signup(user web.UserCreateRequest) (web.UserCreateResponse, error) {
-	// Creating empty response
+// DONE 12/05/25
+func (service *AuthServiceImpl) Signup(request web.UserCreateRequest) (web.UserCreateResponse, error) {
+	// 1. Create necessary variable (e.g context, db)
 	response := web.UserCreateResponse{}
-	service.Logger.Printf("Creating empty UserCreateResponse")
-
-	// Mapping data from Request to Domain
-	service.Logger.Printf("Map data to user domain")	
-	userDomain := domain.User{
-		Email:     	user.Email,
-		Password: 	user.Password,
-		Username:  	user.Username,
-	}
-	service.Logger.Printf("Map with Email: %s, Password %s, Username: %s", userDomain.Email, userDomain.Password, userDomain.Username)
-
-	ctx := context.Background()
-	
 	var txErr error
+	ctx := context.Background()
 
-	// Begin DB Connection
-	service.Logger.Printf("[%s] Begin DB Connection", user.Email)
 	tx, txErr := service.DB.Begin()
 	if txErr != nil {
-		service.Logger.Printf("[%s] Failed Begin DB Connection", user.Email)
-		return response, exception.NewServiceError(txErr.Error(), "Begin DB Conn")
+		return response, exception.NewServiceError(txErr.Error(), "Transaction Begin")
 	}
 
-	// Create Defer
+	// 2. Create defer for db
 	defer func() {
 		if txErr != nil {
-			service.Logger.Printf("[%s] Transaction Rollback", user.Email)
 			tx.Rollback()	
 		} else if recover() != nil {
-			service.Logger.Printf("[%s] Transaction Rollback", user.Email)
 			tx.Rollback()
 		} else { 
-			service.Logger.Printf("[%s] Transaction Commited", user.Email)
 			tx.Commit()
 		}
 	}()
 
-	// 1.B. If user does not exist create a new user in auth-service
-	// 1.B.1. Fully validate the request
-	txErr = user.Validate()
+	// 3. Fully validate the request
+	txErr = request.Validate()
 	if txErr != nil {
 		txErr = exception.NewServiceError(txErr.Error(), "User Validation")
 		return response, txErr
 	}
-	
-	// 1.B.2. Hash the password using bcrypt
+
+	// 4. Bind the data to domain
+	userDomain := domain.User{
+		Email:     	request.Email,
+		Password: 	request.Password,
+		Username:  	request.Username,
+	}
+
+
+	// 5. custom ...
+	// 5.1 Check if user with email already exist
+	_, err := service.UserRepository.FetchUserByEmail(ctx, &userDomain, tx)
+	if err != nil {
+		txErr = err
+		if errors.Is(txErr, exception.ErrEmailWasNotFound) {
+			
+		} else {
+			return response, txErr
+		}
+	} else {
+		return response, exception.NewServiceError(exception.EmailAlreadyExists, "Email Check")
+	}
+
+	// 5.2 Check if user with username already exist
+	_, err = service.UserRepository.FetchUserByUsername(ctx, &userDomain, tx)
+	if err != nil {
+		txErr = err
+		if errors.Is(txErr, exception.ErrUsernameWasNotFound) {
+			
+		} else {
+			return response, txErr
+		}
+	} else {
+		return response, exception.NewServiceError(exception.UsernameAlreadyExists, "Email Check")
+	}
+
+	// 5.3 Generate Email Verification Token
+	emailVerificationToken, err := helper.GenerateNumericToken(6)
+	if err != nil {
+		return response, exception.NewServiceError(err.Error(), "Email Check")
+	}
+
+	// 5.4 Store user db:users email_verified:false
+	// 5.4.A Hash the password using bcrypt
 	var hashPassword []byte
-	hashPassword, txErr = bcrypt.GenerateFromPassword([]byte(user.Password), service.Config.BcryptHashCost)
+	hashPassword, txErr = bcrypt.GenerateFromPassword([]byte(request.Password), service.Config.BcryptHashCost)
 	if txErr != nil {
 		txErr = exception.NewServiceError(txErr.Error(), "Password Hashing")
 		return response, txErr
 	}
 
 	userDomain.Password = string(hashPassword)
-
-	// 1.B.3. Create a new user in the database
+	
+	// 5.4.B Create a new user in the database
 	var uuid string
-	uuid, txErr = service.AuthRepository.CreateUser(ctx, userDomain, tx)
+	uuid, txErr = service.UserRepository.Create(ctx, userDomain, tx)
 	if txErr != nil {
 		return response, txErr
 	}
 
 	userDomain.Id = uuid
 
-	// 2. Generate a JWT access token
-	signedToken, txErr := helper.GenerateJWTAccessToken(uuid, service.Config.SecretKey)
-	if txErr != nil {
-		txErr = exception.NewServiceError(txErr.Error(), "Token Signing")
-		return response, txErr
+	// 5.5 Store email verification token to redis 
+	emailVerificationDomain := domain.EmailVerification{
+		UserId: userDomain.Id,
+		Token: emailVerificationToken,
+		TTL: 10 * time.Minute,
 	}
 
-	// 3. Generate refresh 
-	var refreshToken string
-	refreshToken, txErr = helper.GenerateRefreshToken(service.Config.RefreshTokenLength)
-	if txErr != nil {
-		txErr = exception.NewServiceError(txErr.Error(), "Refresh Token Generation")
-		return response, txErr
-	}
+	service.EmailVerificationRepository.InsertVerification(ctx, &emailVerificationDomain, service.Redis)
 
-	// 4. Store the refresh token in the database
-	txErr = service.TokenRepository.InsertRefreshToken(ctx, userDomain, refreshToken, tx)
-	if txErr != nil {
-		return response, txErr
-	}
-
-	// 5. Send the access token and refresh token in the response
-	response.AccessToken = signedToken
-	response.RefreshToken = refreshToken
+	// 6. Create response
 	response.UUID = uuid
+	response.EmailToken = emailVerificationToken
 
 	return response, nil
 }
@@ -162,7 +186,7 @@ func (service *AuthServiceImpl) Signin(user web.UserSigninRequest) (web.UserSign
 	}
 
 	// 2. Check if the user exists in the database
-	_, err := service.AuthRepository.FetchUser(ctx, &userDomain, tx)
+	_, err := service.UserRepository.FetchUserByEmail(ctx, &userDomain, tx)
 	if err != nil {
 		txErr = err
 		return response, err
@@ -204,9 +228,58 @@ func (service *AuthServiceImpl) Signin(user web.UserSigninRequest) (web.UserSign
 	return response, nil
 }
 
+// DONE 12/05/25
+func (service *AuthServiceImpl) CheckEmail(request web.UserCheckEmailRequest) (bool, error) {
+	// 1. Create necessary variable (e.g context, db)
+	var txErr error
+	ctx := context.Background()
+
+	tx, txErr := service.DB.Begin()
+	if txErr != nil {
+		return false, exception.NewServiceError(txErr.Error(), "Transaction Begin")
+	}
+
+	// 2. Create defer for db
+	defer func() {
+		if txErr != nil {
+			tx.Rollback()
+		} else if recover() != nil {
+			tx.Rollback()
+		} else { 
+			tx.Commit()
+		}
+	}()
+
+	// 3. Fully validate the request
+	err := request.Validate()
+	if err != nil {
+		txErr = err
+		return false, exception.NewServiceError(txErr.Error(), "Request Validation")
+	}
+
+	// 4. Bind the data to domain
+	userDomain := domain.User{
+		Email: request.Email,
+	}
+
+	// 5. custom ...
+	_, err = service.UserRepository.FetchUserByEmail(ctx, &userDomain, tx)
+	if err != nil {
+		txErr = err
+		if errors.Is(txErr, exception.ErrEmailWasNotFound) {
+			return false, nil
+		}
+
+		return false, txErr
+	}
+
+	// 6. Create response
+	return true, nil
+}
+
 func (service *AuthServiceImpl) Refresh(user web.UserRefreshRequest) (web.UserRefreshResponse, error) {
 	response := web.UserRefreshResponse{}
-	tokenDomain := domain.Tokens{
+	tokenDomain := domain.WebToken{
 		RefreshToken: user.RefreshToken,
 	}
 	ctx := context.Background()
@@ -251,33 +324,30 @@ func (service *AuthServiceImpl) Refresh(user web.UserRefreshRequest) (web.UserRe
 
 func (service *AuthServiceImpl) Signout(user web.UserSignoutRequest) (error) {
 	// Mapping data from Request to Domain
-	service.Logger.Printf("Map data to user domain")	
-	tokenDomain := domain.Tokens{
+	tokenDomain := domain.WebToken{
 		RefreshToken: user.RefreshToken,
 	}
-	service.Logger.Printf("Map with Refresh Token: %s", tokenDomain.RefreshToken)
 
 	ctx := context.Background()
 	var txErr error
 
 	// Begin DB Connection
-	service.Logger.Printf("[%s] Begin DB Connection", user.RefreshToken)
 	tx, txErr := service.DB.Begin()
 	if txErr != nil {
-		service.Logger.Printf("[%s] Failed Begin DB Connection", user.RefreshToken)
+
 		return exception.NewServiceError(txErr.Error(), "Begin DB Conn")
 	}
 
 	// Create Defer
 	defer func() {
 		if txErr != nil {
-			service.Logger.Printf("[%s] Transaction Rollback", user.RefreshToken)
+	
 			tx.Rollback()	
 		} else if recover() != nil {
-			service.Logger.Printf("[%s] Transaction Rollback", user.RefreshToken)
+	
 			tx.Rollback()
 		} else { 
-			service.Logger.Printf("[%s] Transaction Commited", user.RefreshToken)
+	
 			tx.Commit()
 		}
 	}()

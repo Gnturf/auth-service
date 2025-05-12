@@ -9,18 +9,18 @@ import (
 	"log"
 	"os"
 
-	"github.com/go-playground/validator"
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 )
 
 /*
 	AUTH SERVICE
-	1. /auth/signin
-	2. /auth/signup
-	3. /auth/refresh-token
-	4. /auth/logout
-	5. /auth/verify-email
+	1. /check-email ✔️
+	2. /signup ✔️
+	3. /signin
+	4. /signout
+	5. /refresh-token
+	6. /verify-email
 */
 
 func init() {
@@ -37,18 +37,19 @@ func main() {
 
 	logger := log.Default()
 	db := initializer.NewPostgressDB()
-	validate := validator.New()
+	redis := initializer.NewRedisConn(&config.AppConfigInstance)
 
-	authRepository := repository.NewAuthRepository(&config.AppConfigInstance, logger)
-	tokenRepository := repository.NewTokenRepository(&config.AppConfigInstance, logger)
-	service := service.NewAuthService(authRepository, tokenRepository, &config.AppConfigInstance, logger, db, validate)
+	userRepository := repository.NewUserRepositoryImpl(&config.AppConfigInstance)
+	tokenRepository := repository.NewTokenRepository(&config.AppConfigInstance)
+	emailVerificationRepository := repository.NewVerificationRepositoryImpl()
+	service := service.NewAuthService(userRepository, tokenRepository, emailVerificationRepository, &config.AppConfigInstance, db, redis)
 	controller := controller.NewAuthController(service, &config.AppConfigInstance)
 
-	authGroup := e.Group("/auth")
-	authGroup.POST("/signup", controller.HandleSignup)
-	authGroup.POST("/signin", controller.HandleSignin)
-	authGroup.POST("/refresh", controller.HandleRefresh)
-	authGroup.POST("/signout", controller.HandleSignout)
+	e.POST("/signup", controller.HandleSignup)
+	e.POST("/signin", controller.HandleSignin)
+	e.POST("/check-email", controller.HandleCheckEmail)
+	e.POST("/refresh", controller.HandleRefresh)
+	e.POST("/signout", controller.HandleSignout)
 
 	port := os.Getenv("PORT")
 	if port == "" {

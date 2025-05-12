@@ -1,7 +1,6 @@
 package web
 
 type UserCreateResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	UUID         string `json:"uuid"`
+	EmailToken string `json:"email_token"`
+	UUID       string `json:"uuid"`
 }
